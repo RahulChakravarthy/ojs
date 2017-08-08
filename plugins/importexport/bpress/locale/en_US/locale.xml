@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE locale SYSTEM "../../../../../lib/pkp/dtd/locale.dtd">
+
+<!--
+  * plugins/importexport/nlm/locale/en_US/locale.xml
+  *
+  * Copyright (c) 2017 Simon Fraser University Library
+  * Distributed under the GNU GPL v2. For full terms see the file docs/COPYING.
+  *
+  * Localization strings
+  -->
+
+<locale name="en_US" full_name="U.S. English">
+	<message key="plugins.importexport.bpress.displayName">BPress Import Plugin</message>
+	<message key="plugins.importexport.bpress.description">Import articles into journal from BPress XML.</message>
+
+	<message key="plugins.importexport.bpress.cliUsage"><![CDATA[Command-line tool for importing BPress XML article data into OJS
+			Usage:
+			{$scriptName} journalPath userName directoryName
+			journalPath specifies the journal into which the articles should be imported.
+			userName specifies which journal user should be assigned the imported articles.
+			directoryName includes Bpress XML articles to be imported along with associated PDF galleys and supplementary files.
+]]></message>
+
+	<message key="plugins.importexport.bpress.unknownJournal">Unknown Journal: "{$journal}". Exiting.</message>
+	<message key="plugins.importexport.bpress.unknownUser">Unknown User: "{$username}". Exiting.</message>
+	<message key="plugins.importexport.bpress.directoryDoesNotExist">The directory "{$directory}" does not exist. Exiting.</message>
+	<message key="plugins.importexport.bpress.invalidDate">Invalid date format: {$value}. Skipping.</message>
+	<message key="plugins.importexport.bpress.unknownLocale">Unknown Locale: "{$locale}". Skipping.</message>
+	<message key="plugins.importexport.bpress.unableToParseXMLDocument">Unable to parse XML document in {$directory}. Skipping.</message>
+	<message key="plugins.importexport.bpress.import.error.missingPubDate">Error: The article publication date is missing for "{$title}". Skipping.</message>
+	<message key="plugins.importexport.bpress.import.error.missingVolumeNumber">Error: The article volume/number is missing for "{$title}". Skipping.</message>
+	<message key="plugins.importexport.bpress.import.error.missingIssue">Error: The article issue is missing for "{$title}". Skipping.</message>
+	<message key="plugins.importexport.bpress.import.error.missingSection">Error: The article section is missing for "{$title}". Skipping.</message>
+	<message key="plugins.importexport.bpress.import.error.missingGalley">Error: The article galley is missing for "{$title}"</message>
+	<message key="plugins.importexport.bpress.import.error.articleTitleLocaleUnsupported">The article title locale is unsupported.</message>
+	<message key="plugins.importexport.bpress.import.error.articleTitleMissing">The article title is missing.</message>
+	<message key="plugins.importexport.bpress.import.error.duplicatePublicArticleId">There is already a published article with this DOI: {$anotherArticle}</message>
+	<message key="plugins.importexport.bpress.import.success.description">The import was successful. Successfully-imported items are listed below.</message>
+	<message key="plugins.importexport.bpress.issueImport">====== {$title} ======</message>
+	<message key="plugins.importexport.bpress.sectionImport">---{$title}---</message>
+	<message key="plugins.importexport.bpress.articleImported">'{$title}' successfully imported</message>
+
+</locale>

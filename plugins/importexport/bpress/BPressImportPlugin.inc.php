@@ -84,137 +84,117 @@ class BPressImportPlugin extends ImportExportPlugin {
 		
 		
 		$this->import('BPressImportDom');
-		
+		echo 'Import Starting ...' . "\n";
 		// Import issues from oldest to newest
-		$importDirectories = array();
-		$directoryHandle = opendir($directoryName);
-		while ($importDirectories[] = readdir($directoryHandle));
-		sort($importDirectories, SORT_NATURAL);
-		closedir($directoryHandle);
-		
-		foreach ($importDirectories as $entry) {
-			$curDirectoryPath = $directoryName . "/" . $entry;
-			// We have a directory, but not a hidden one or . or ..
-			var_dump($entry . ':   '. !preg_match('/^\./', $entry));
-			if (is_dir($curDirectoryPath) && !preg_match('/^\./', $entry)) {
-				// We have a directory of XML files
-				if (preg_match('/\.xml$/', $curDirectoryPath)) {
-					// Set corresponding directories for PDF and peripheral files
-					$curDirectoryBasePath = dirname($curDirectoryPath);
-					$curDirectoryBaseName = basename($curDirectoryPath, '.xml');
-					$pdfDirectoryPath = $curDirectoryBasePath . '/' . $curDirectoryBaseName . '.pdf';
-					$peripheralDirectoryPath = $curDirectoryBasePath . '/' . $curDirectoryBaseName . '.peripherals';
-					$htmlDirectoryPath = $curDirectoryPath;
-					$imageDirectoryPath = $curDirectoryBasePath . '/' . $curDirectoryBaseName . '.graphics';
-					// Process all article XML files
-					// We assume that files in the directory are read in alpha-numerical order, i.e.
-					// corresponding to page numbers of published articles, i.e. article order in the TOC
-					$xmlDirectoryHandle = opendir($curDirectoryPath);
-					$curIssueId = 0;
-					$featuresSectionId = null;
-					$departmentsSectionId = null;
-					$correctionSections = array();
-					$allSections = array();
-					
-					// Import articles from first to last in TOC
-					$xmlFiles = array();
-					while ($xmlFiles[] = readdir($xmlDirectoryHandle));
-					sort($xmlFiles, SORT_NATURAL);
-					closedir($xmlDirectoryHandle);
-					
-					foreach ($xmlFiles as $xmlEntry) {
-						// Set full path to article XML file
-						$xmlArticleFile = $curDirectoryPath . "/" . $xmlEntry;
-						
-						if (is_file($xmlArticleFile)) {
-							$xmlArticle = $this->getDocument($xmlArticleFile);
+		$importJournal = array();
+		$journalHandler = opendir($directoryName);
+		while ($importIssues[] = readdir($journalHandler));
 
-							if ($xmlArticle) {
-								$returner = NlmImportDom::importArticle($journal, $user, $xmlArticle, $xmlEntry, $pdfDirectoryPath, $htmlDirectoryPath, $imageDirectoryPath, $peripheralDirectoryPath);
-								if ($returner && is_array($returner)) {
-									$issue = $returner['issue'];
-									$section = $returner['section'];
-									$article = $returner['article'];
-									
-									$issueId = $issue->getId();
-									$sectionId = $section->getId();
-									
-									if ($curIssueId != $issueId) {
-										$curIssueId = $issueId;
-										$issueTitle = $issue->getIssueIdentification();
-										echo __('plugins.importexport.nlm.issueImport', array('title' => $issueTitle)) . "\n\n";
-									}
-									
-									if (!in_array($sectionId, $allSections)) {
+		$allIssueIds = array();
+
+		foreach ($importIssues as $issueName){ //Processes each issue in the journal folder
+			if (preg_match('/^[a-zA-Z0-9\s]+$/', $issueName)){
+				$issueName = $directoryName . $issueName;
+				
+				$importDirectories = array();
+				$directoryHandle = opendir($issueName);
+				while ($importDirectories[] = readdir($directoryHandle));
+				sort($importDirectories, SORT_NATURAL);
+				closedir($directoryHandle);
+				
+				$curIssueId = 0;
+				$currSectionId = 0;
+				$allSections = array();
+				
+				foreach ($importDirectories as $entry) { //Processes each submission in the issue folder
+					$curDirectoryPath = $issueName . '/' . $entry;
+					// We have a directory, but not a hidden one or . or ..
+					
+					if (is_dir($curDirectoryPath) && !preg_match('/^\./', $entry) && $entry) {
+						// Process all article XML files
+						// We assume that files in the directory are read in alpha-numerical order, i.e.
+						// corresponding to page numbers of published articles, i.e. article order in the TOC
+						$submissionHandler = opendir($curDirectoryPath);
+						$submissionFiles = array();
+						while ($submissionFiles[] = readdir($submissionHandler));
+						$xmlFiles = array();
+						$pdfFiles = array();
+						foreach($submissionFiles as $file){
+							if (preg_match('/\.xml$/', $file)){
+								$xmlFiles[] = $file;
+							} elseif (preg_match('/\.pdf$/', $file)){
+								$pdfFiles[] = $file;
+							}
+						}			
+						closedir($submissionHandler);
+						
+						foreach ($xmlFiles as $xmlEntry) {
+							// Set full path to article XML file
+							$xmlArticleFile = $curDirectoryPath . "/" . $xmlEntry;
+							
+							//This only works for one pdf path, scale it to work with multiple pdf paths 
+							$pdfArticleFile = $curDirectoryPath . "/" . $pdfFiles[0];
+							
+							if (is_file($xmlArticleFile)) {
+								$xmlArticle = $this->getDocument($xmlArticleFile);
+									if ($xmlArticle) {
+										$number = null;
+										preg_match_all('/\d+/',basename(dirname(dirname($xmlArticleFile))), $number);
+										$number = array_shift(array_shift($number));
 										
-										$regularSection = true;
+										$volume = null;
+										preg_match_all('/\d+/',basename(dirname(dirname(dirname($xmlArticleFile)))), $volume);
+										$volume = array_shift(array_shift($volume));
 										
-										// CRL News: Features should be first; Departments and Corrections should always be last
-										if ($journal->getPath() == 'crlnews') {
-											$sectionTitle = $section->getTitle($journal->getPrimaryLocale());
-											if (preg_match("/Departments/i", $sectionTitle)) {
-												$departmentsSectionId = $sectionId;
-												$regularSection = false;
-											}
-											if (preg_match("/^Features$/i", $sectionTitle)) {
-												$featuresSectionId = $sectionId;
-												$regularSection = false;
-											}
-											if (preg_match("/Correction(.*)/i", $sectionTitle)) {
-												if (!in_array($sectionId, $correctionSections)) $correctionSections[] = $sectionId;
-												$regularSection = false;
-											}
+										$returner = BPressImportDom::importArticle($journal, $user, $xmlArticle, $xmlEntry, $pdfArticleFile, $curDirectoryPath, $curDirectoryPath, $curDirectoryPath, $volume, $number);
+									if ($returner && is_array($returner)) {
+										$issue = $returner['issue'];
+										$section = $returner['section'];
+										$article = $returner['article'];
+										
+										$issueId = $issue->getId();
+										$sectionId = $section->getId();
+										
+										if ($curIssueId != $issueId) {
+											$allIssues[] = $issueId;
+											$curIssueId = $issueId;
+											$issueTitle = $issue->getIssueIdentification();
+											echo __('plugins.importexport.bpress.issueImport', array('title' => $issueTitle)) . "\n\n";
+										}
+										if ($currSectionId != $sectionId){
+											$currSectionId = $sectionId;
+											$sectionTitle = $section->getLocalizedTitle();
+											echo __('plugins.importexport.bpress.sectionImport', array('title' => $sectionTitle)) . "\n\n";
 										}
 										
-										// Add section to list of sections
-										if ($regularSection) {
+										if (!in_array($sectionId, $allSections)) {
 											$allSections[] = $sectionId;
 										}
 										
-										$sectionTitle = $section->getLocalizedTitle();
-										echo __('plugins.importexport.nlm.sectionImport', array('title' => $sectionTitle)) . "\n\n";
+										$articleTitle = $article->getLocalizedTitle();
+										echo __('plugins.importexport.bpress.articleImported', array('title' => $articleTitle)) . "\n\n";
 									}
-									
-									$articleTitle = $article->getLocalizedTitle();
-									echo __('plugins.importexport.nlm.articleImported', array('title' => $articleTitle)) . "\n\n";
 								}
 							}
 						}
 					}
-					
-					// Add default custom section ordering for TOC
-					$sectionDao =& DAORegistry::getDAO('SectionDAO');
-					$numSections = 0;
-					
-					// CRL News: Features should always be first in TOC; Departments and Corrections should always be last
-					if ($featuresSectionId) {
-						$numSections++;
-						$sectionDao->insertCustomSectionOrder($issueId, $featuresSectionId, $numSections);
-					}
-					
-					// Add each section in page number order for articles
-					foreach ($allSections as $curSectionId) {
-						$numSections++;
-						$sectionDao->insertCustomSectionOrder($issueId, $curSectionId, $numSections);
-					}
-					
-					// CRL News: Departments and Corrections should always be last
-					if ($departmentsSectionId) {
-						$numSections++;
-						$sectionDao->insertCustomSectionOrder($issueId, $departmentsSectionId, $numSections);
-					}
-					foreach ($correctionSections as $correctionSectionId) {
-						$numSections++;
-						$sectionDao->insertCustomSectionOrder($issueId, $correctionSectionId, $numSections);
-					}
-					
+				}
+				
+				// Add default custom section ordering for TOC
+				$sectionDao =& DAORegistry::getDAO('SectionDAO');
+				$numSections = 0;
+				
+				// Add each section in page number order for articles
+				foreach ($allSections as $curSectionId) {
+					$sectionDao->insertCustomSectionOrder($issueId, $curSectionId, ++$numSections);
 				}
 			}
 		}
+		
 		// Setup default custom issue order
 		$issueDao =& DAORegistry::getDAO('IssueDAO');
 		$issueDao->setDefaultCustomIssueOrders($journal->getId());
-		
+		echo 'Import Complete...';
 		exit();
 	}
 	
@@ -222,7 +202,7 @@ class BPressImportPlugin extends ImportExportPlugin {
 	 * Display the command-line usage information
 	 */
 	function usage($scriptName) {
-		echo __('plugins.importexport.nlm.cliUsage', array(
+		echo __('plugins.importexport.bpress.cliUsage', array(
 				'scriptName' => $scriptName,
 				'pluginName' => $this->getName()
 		)) . "\n";

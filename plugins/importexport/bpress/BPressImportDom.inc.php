@@ -12,18 +12,18 @@
  */
 import('lib.pkp.classes.xml.XMLCustomWriter');
 
-class NlmImportDom {
+class BPressImportDom {
 	
-	function importArticle(&$journal, &$user, &$xmlArticle, $articleFileName, $pdfPath, $htmlPath, $imagePath, $peripheralPath) {
-		$frontNode = $xmlArticle->getChildByName('front');
-		$articleNode = $frontNode->getChildByName('article-meta');
+	function importArticle(&$journal, &$user, &$xmlArticle, $articleFileName, $pdfPath, $htmlPath, $imagePath, $peripheralPath, $volume, $number) {
+		$articleNode = $xmlArticle->getChildByName('document');
 		$dependentItems = array();
 		$errors = array();
 		
-		$result = NlmImportDom::handleArticleNode($journal, $user, $xmlArticle, $articleNode, $articleFileName, $pdfPath, $htmlPath, $imagePath, $peripheralPath, $dependentItems, $errors);
+		$result = BPressImportDom::handleArticleNode($journal, $user, $xmlArticle, $articleNode, $articleFileName, $pdfPath, $htmlPath, $imagePath, $peripheralPath, $dependentItems, $volume, $number, $errors);
 		if (!$result) {
-			NlmImportDom::cleanupFailure($dependentItems);
+			BPressImportDom::cleanupFailure($dependentItems);
 		}
+		
 		return $result;
 	}
 	
@@ -38,29 +38,29 @@ class NlmImportDom {
 	 * @param array $errors
 	 * @return Article the imported article
 	 */
-	function handleArticleNode(&$journal, &$user, &$xmlArticleDOM, &$articleNode, $articleFileName, $pdfPath, $htmlPath, $imagePath, $peripheralPath, &$dependentItems, &$errors) {
+	function handleArticleNode(&$journal, &$user, &$xmlArticleDOM, &$articleNode, $articleFileName, $pdfPath, $htmlPath, $imagePath, $peripheralPath, &$dependentItems, $volume, $number, &$errors) {
 		
-		if (!$journal || !$user || !$articleNode || !$articleFileName || !$pdfPath || !$peripheralPath) {
+		if (!$journal || !$user || !$articleNode || !$articleFileName || !$pdfPath || !$peripheralPath || !$volume || !$number) {
 			return null;
 		}
 		
 		// Process issue first
-		$issue =& NlmImportDom::handleIssue($journal, $articleNode, $peripheralPath, $dependentItems, $errors);
+		$issue =& BPressImportDom::handleIssue($journal, $articleNode, $peripheralPath, $dependentItems, $errors, $volume, $number);
 		
 		// Ensure we have an issue
 		if (!$issue) {
-			$articleTitle = NlmImportDom::getArticleTitle($articleNode);
-			$errors[] = array('plugins.importexport.nlm.import.error.missingIssue', array('title' => $articleTitle));
+			$articleTitle = BPressImportDom::getArticleTitle($articleNode);
+			$errors[] = array('plugins.importexport.bpress.import.error.missingIssue', array('title' => $articleTitle));
 			return null;
 		}
 		
 		// Process article section
-		$section =& NlmImportDom::handleSection($journal, $articleNode, $dependentItems, $errors);
+		$section =& BPressImportDom::handleSection($journal, $articleNode, $dependentItems, $errors);
 		
 		// Ensure we have a section
 		if (!$section) {
-			$articleTitle = NlmImportDom::getArticleTitle($articleNode);
-			$errors[] = array('plugins.importexport.nlm.import.error.missingSection', array('title' => $articleTitle));
+			$articleTitle = BPressImportDom::getArticleTitle($articleNode);
+			$errors[] = array('plugins.importexport.bpress.import.error.missingSection', array('title' => $articleTitle));
 			return null;
 		}
 		
@@ -75,7 +75,6 @@ class NlmImportDom {
 		$article->setLanguage('en');
 		$article->setJournalId($journal->getId());
 		$article->setSectionId($section->getId());
-		$article->setUserId($user->getId());
 		$article->setStatus(STATUS_PUBLISHED);
 		$article->setSubmissionProgress(0);
 		$article->setDateSubmitted($issue->getDatePublished());
@@ -91,6 +90,7 @@ class NlmImportDom {
 			$article->setPages($firstPageNode->getValue());
 		}
 		
+		//NO DOI PROVIDED IN BPRESS METADATA
 		// Look for a CRL DOI and assign it to the article
 		$articleDOI = null;
 		$publisherDOI = null;
@@ -100,7 +100,7 @@ class NlmImportDom {
 				$articleDOI = $node->getValue();
 				$anotherArticle = $publishedArticleDao->getPublishedArticleByPubId('doi', $articleDOI, $journal->getId());
 				if ($anotherArticle) {
-					$errors[] = array('plugins.importexport.nlm.import.error.duplicatePublicArticleId', array('otherArticleTitle' => $anotherArticle->getLocalizedTitle()));
+					$errors[] = array('plugins.importexport.bpress.import.error.duplicatePublicArticleId', array('otherArticleTitle' => $anotherArticle->getLocalizedTitle()));
 					$hasErrors = true;
 				}
 			} elseif ($articleIdType == 'publisher-id') {
@@ -128,7 +128,7 @@ class NlmImportDom {
 		}
 		
 		// Get article title and (optionally) subtitle
-		$title = NlmImportDom::processTitle($articleNode);
+		$title = BPressImportDom::getArticleTitle($articleNode);
 		$article->setTitle($title, $primaryLocale);
 		
 		// Get article abstract if it exists
@@ -142,52 +142,64 @@ class NlmImportDom {
 		}
 		
 		// Add article
-		$articleDao->insertArticle($article);
+		$articleDao->insertObject($article);
 		$dependentItems[] = array('article', $article);
 		
 		// Process authors and assign to article
 		$allAuthors = array();
-		NlmImportDom::processAuthors($articleNode, $article, $journal, $allAuthors, true);
+		BPressImportDom::processAuthors($articleNode, $article, $journal, $allAuthors, true);
 		
 		// Create completed submission workflow records
-		$signoffDao =& DAORegistry::getDAO('SignoffDAO');
 		
-		$initialCopyeditSignoff = $signoffDao->build('SIGNOFF_COPYEDITING_INITIAL', ASSOC_TYPE_ARTICLE, $article->getId());
-		$initialCopyeditSignoff->setUserId(0);
-		$signoffDao->updateObject($initialCopyeditSignoff);
+// 		$signoffDao =& DAORegistry::getDAO('SignoffDAO');
 		
-		$authorCopyeditSignoff = $signoffDao->build('SIGNOFF_COPYEDITING_AUTHOR', ASSOC_TYPE_ARTICLE, $article->getId());
-		$authorCopyeditSignoff->setUserId(0);
-		$signoffDao->updateObject($authorCopyeditSignoff);
+// 		$initialCopyeditSignoff = $signoffDao->build('SIGNOFF_COPYEDITING_INITIAL', ASSOC_TYPE_ARTICLE, $article->getId());
+// 		$initialCopyeditSignoff->setUserId(0);
+// 		$signoffDao->updateObject($initialCopyeditSignoff);
 		
-		$finalCopyeditSignoff = $signoffDao->build('SIGNOFF_COPYEDITING_FINAL', ASSOC_TYPE_ARTICLE, $article->getId());
-		$finalCopyeditSignoff->setUserId(0);
-		$signoffDao->updateObject($finalCopyeditSignoff);
+// 		$authorCopyeditSignoff = $signoffDao->build('SIGNOFF_COPYEDITING_AUTHOR', ASSOC_TYPE_ARTICLE, $article->getId());
+// 		$authorCopyeditSignoff->setUserId(0);
+// 		$signoffDao->updateObject($authorCopyeditSignoff);
 		
-		$layoutSignoff = $signoffDao->build('SIGNOFF_LAYOUT', ASSOC_TYPE_ARTICLE, $article->getId());
-		$layoutSignoff->setUserId(0);
-		$signoffDao->updateObject($layoutSignoff);
+// 		$finalCopyeditSignoff = $signoffDao->build('SIGNOFF_COPYEDITING_FINAL', ASSOC_TYPE_ARTICLE, $article->getId());
+// 		$finalCopyeditSignoff->setUserId(0);
+// 		$signoffDao->updateObject($finalCopyeditSignoff);
 		
-		$authorProofSignoff = $signoffDao->build('SIGNOFF_PROOFREADING_AUTHOR', ASSOC_TYPE_ARTICLE, $article->getId());
-		$authorProofSignoff->setUserId(0);
-		$signoffDao->updateObject($authorProofSignoff);
+// 		$layoutSignoff = $signoffDao->build('SIGNOFF_LAYOUT', ASSOC_TYPE_ARTICLE, $article->getId());
+// 		$layoutSignoff->setUserId(0);
+// 		$signoffDao->updateObject($layoutSignoff);
 		
-		$proofreaderProofSignoff = $signoffDao->build('SIGNOFF_PROOFREADING_PROOFREADER', ASSOC_TYPE_ARTICLE, $article->getId());
-		$proofreaderProofSignoff->setUserId(0);
-		$signoffDao->updateObject($proofreaderProofSignoff);
+// 		$authorProofSignoff = $signoffDao->build('SIGNOFF_PROOFREADING_AUTHOR', ASSOC_TYPE_ARTICLE, $article->getId());
+// 		$authorProofSignoff->setUserId(0);
+// 		$signoffDao->updateObject($authorProofSignoff);
 		
-		$layoutProofSignoff = $signoffDao->build('SIGNOFF_PROOFREADING_LAYOUT', ASSOC_TYPE_ARTICLE, $article->getId());
-		$layoutProofSignoff->setUserId(0);
-		$signoffDao->updateObject($layoutProofSignoff);
+// 		$proofreaderProofSignoff = $signoffDao->build('SIGNOFF_PROOFREADING_PROOFREADER', ASSOC_TYPE_ARTICLE, $article->getId());
+// 		$proofreaderProofSignoff->setUserId(0);
+// 		$signoffDao->updateObject($proofreaderProofSignoff);
+		
+// 		$layoutProofSignoff = $signoffDao->build('SIGNOFF_PROOFREADING_LAYOUT', ASSOC_TYPE_ARTICLE, $article->getId());
+// 		$layoutProofSignoff->setUserId(0);
+// 		$signoffDao->updateObject($layoutProofSignoff);
 		
 		// Log the import in the article event log
-		import('classes.article.log.ArticleLog');
-		ArticleLog::logEventHeadless(
-				$journal, $user->getId(), $article,
-				ARTICLE_LOG_ARTICLE_IMPORT,
-				'log.imported',
-				array('userName' => $user->getFullName(), 'articleId' => $article->getId())
-				);
+// 		import('classes.article.log.ArticleLog');
+// 		ArticleLog::logEventHeadless(
+// 				$journal, $user->getId(), $article,
+// 				ARTICLE_LOG_ARTICLE_IMPORT,
+// 				'log.imported',
+// 				array('userName' => $user->getFullName(), 'articleId' => $article->getId())
+// 				);
+
+		//process keywords
+		$submissionKeywordDAO = DAORegistry::getDAO('SubmissionKeywordDAO');
+		$keywordsNode = $articleNode->getChildByName('keywords');
+		$keywords = array();
+		if ($keywordsNode){
+			for ($i = 0; $keywordNode = $keywordsNode->getChildByName('keyword', $i); $i++){
+				$keywords[] = $keywordNode->getValue();
+			}
+		}
+		$submissionKeywordDAO->insertKeywords($keywords, $article->getId());
 		
 		// Insert published article entry
 		$publishedArticle = new PublishedArticle();
@@ -198,12 +210,12 @@ class NlmImportDom {
 		$publishedArticle->setAccessStatus(ARTICLE_ACCESS_OPEN);
 		
 		if ($firstPageNode) {
-			$publishedArticle->setSeq($firstPageNode->getValue());
+			$publishedArticle->setSequence($firstPageNode->getValue());
 		} else {
-			$publishedArticle->setSeq(REALLY_BIG_NUMBER + $article->getId());
+			$publishedArticle->setSequence(REALLY_BIG_NUMBER + $article->getId());
 		}
 		
-		$publishedArticleDao->insertPublishedArticle($publishedArticle);
+		$publishedArticleDao->insertObject($publishedArticle);
 		
 		// Process copyright and license
 		$permissionsNode = $articleNode->getChildByName('permissions');
@@ -243,34 +255,29 @@ class NlmImportDom {
 		$articleDao->updateLocaleFields($article);
 		
 		// Process galleys
-		$pdfGalleyNode = $articleNode->getChildByName('self-uri');
+		$pdfGalleyNode = $articleNode->getChildByName('fulltext-url');
 		$pdfGalleyFile = $pdfGalleyNode ? $pdfGalleyNode->getAttribute('xlink:href') : null;
 		
 		// PDF galleys by default for all journals
-		import('classes.file.ArticleFileManager');
-		$articleFileManager = new ArticleFileManager($article->getId());
+		import('lib.pkp.classes.file.SubmissionFileManager');
+		$submissionFileManager = new SubmissionFileManager(Request::getContext(),$article->getId());
 		
-		if (!$pdfGalleyFile) {
-			$articleBaseName = basename($articleFileName, '.xml');
-			$pdfGalleyFile = $articleBaseName . '.pdf';
-		}
-		
-		if ($pdfGalleyFile) {
-			$pdfGalleyPath = $pdfPath . '/' . $pdfGalleyFile;
-			$result = NlmImportDom::handlePDFGalleyNode($journal, $pdfGalleyPath, $article, $errors, $articleFileManager);
+		$fileId = (int) $articleNode->getChildValue('label');
+		if ($fileId) {
+			$result = BPressImportDom::handlePDFGalleyNode($journal, $pdfPath, $fileId, $article, $errors, $submissionFileManager);
 		}
 		
 		// For CRL News, also process XHTML galleys for newer issues
 		if (($journal->getPath() == 'crlnews') && (is_dir($imagePath))) {
 			$htmlGalleyPath = $htmlPath . '/' . $articleFileName;
-			$result = NlmImportDom::handleHTMLGalley($journal, $xmlArticleDOM, $articleNode, $htmlGalleyPath, $imagePath, $article, $errors, $articleFileManager);
+			$result = BPressImportDom::handleHTMLGalley($journal, $xmlArticleDOM, $articleNode, $htmlGalleyPath, $imagePath, $article, $errors, $submissionFileManager);
 		}
 		
 		// Index the article
 		import('classes.search.ArticleSearchIndex');
 		$articleSearchIndex = new ArticleSearchIndex();
 		$articleSearchIndex->articleMetadataChanged($article);
-		$articleSearchIndex->articleFilesChanged($article);
+		$articleSearchIndex->submissionFilesChanged($article);
 		$articleSearchIndex->articleChangesFinished();
 		
 		$returner = array ('issue' => $issue, 'section' => $section, 'article' => $article);
@@ -286,7 +293,7 @@ class NlmImportDom {
 	 * @param array $errors
 	 * @return Issue the imported issue
 	 */
-	function handleIssue(&$journal, &$articleNode, $peripheralPath, &$dependentItems, &$errors) {
+	function handleIssue(&$journal, &$articleNode, $peripheralPath, &$dependentItems, &$errors, $volume, $number) {
 		$primaryLocale = $journal->getPrimaryLocale();
 		$seasonMap = array(
 				'Spring' => '03',
@@ -296,16 +303,10 @@ class NlmImportDom {
 				'Winter' => '12'
 		);
 		
-		// Get volume and issue info
-		$node = $articleNode->getChildByName('volume');
-		$volume = $node ? $node->getValue() : null;
-		$node = $articleNode->getChildByName('issue');
-		$number = $node ? $node->getValue() : null;
-		
 		// Ensure we have a volume and issue number
 		if (!$volume || !$number) {
-			$articleTitle = NlmImportDom::getArticleTitle();
-			$errors[] = array('plugins.importexport.nlm.import.error.missingVolumeNumber', array('title' => $articleTitle));
+			$articleTitle = BPressImportDom::getArticleTitle();
+			$errors[] = array('plugins.importexport.bpress.import.error.missingVolumeNumber', array('title' => $articleTitle));
 			return null;
 		}
 		
@@ -318,28 +319,25 @@ class NlmImportDom {
 		}
 		
 		// Determine issue publication date based on article publication date
-		$pubDateNode = $articleNode->getChildByName('pub-date');
-		$node = $pubDateNode->getChildByName('season');
-		$season = $node ? $node->getValue() : null;
-		$node = $pubDateNode->getChildByName('year');
-		$year = $node ? $node->getValue() : null;
-		$node = $pubDateNode->getChildByName('month');
-		$month = $node ? $node->getValue() : null;
-		$node = $pubDateNode->getChildByName('day');
-		$day = $node ? $node->getValue() : null;
+		$pubDateNode = $articleNode->getChildByName('publication-date');
+		$date = date_parse($pubDateNode->getValue());
+		$year = (int) $date['year'];
+		$month = (int) $date['month'];
+		$season = (int) $date['month'];
+		$day = $date['day'];
 		
 		// Ensure we have a year
 		if (!$year || !is_numeric($year)) {
-			$articleTitle = NlmImportDom::getArticleTitle();
-			$errors[] = array('plugins.importexport.nlm.import.error.missingPubDate', array('title' => $articleTitle));
+			$articleTitle = BPressImportDom::getArticleTitle();
+			$errors[] = array('plugins.importexport.bpress.import.error.missingPubDate', array('title' => $articleTitle));
 			return null;
 		}
 		
 		// Ensure we have a month or season
 		if (!$month || !is_numeric($month)) {
 			if (!$season) {
-				$articleTitle = NlmImportDom::getArticleTitle();
-				$errors[] = array('plugins.importexport.nlm.import.error.missingPubDate', array('title' => $articleTitle));
+				$articleTitle = BPressImportDom::getArticleTitle();
+				$errors[] = array('plugins.importexport.bpress.import.error.missingPubDate', array('title' => $articleTitle));
 				return null;
 			}
 			if (!array_key_exists($season, $seasonMap)) {
@@ -380,7 +378,7 @@ class NlmImportDom {
 		$issue->setShowNumber(1);
 		$issue->setShowYear(1);
 		$issue->setShowTitle(1);
-		$issueDao->insertIssue($issue);
+		$issueDao->insertObject($issue);
 		
 		if (!$issue->getId()) {
 			return null;
@@ -455,7 +453,7 @@ class NlmImportDom {
 			}
 		}
 		
-		$issueDao->updateIssue($issue);
+		$issueDao->updateObject($issue);
 		return $issue;
 	}
 	
@@ -468,28 +466,13 @@ class NlmImportDom {
 	 * @return Section
 	 */
 	function handleSection(&$journal, &$articleNode, &$dependentItems, &$errors) {
-		// Get volume and issue info
-		$categoriesNode = $articleNode->getChildByName('article-categories');
+		// Get volume and issue info	
 		$sectionName = null;
-		
-		$subjectGroupNode = $categoriesNode ? $categoriesNode->getChildByName('subj-group') : null;
-		$subjectNode = $subjectGroupNode ? $subjectGroupNode->getChildByName('subject') : null;
+		$subjectGroupNode = $articleNode ? $articleNode->getChildByName('subject-areas') : null;
+		$subjectNode = $subjectGroupNode ? $subjectGroupNode->getChildByName('subject-area') : null;
 		
 		if ($subjectNode) {
 			$sectionName = ucwords(strtolower($subjectNode->getValue()));
-			
-			// Check for possible sub-heading
-			$subGroupNode = $subjectGroupNode->getChildByName('subj-group');
-			if ($subGroupNode) {
-				$subSubjectNode = $subGroupNode->getChildByName('subject');
-				if ($subSubjectNode) $sectionName .= ': ' . ucwords(strtolower($subSubjectNode->getValue()));
-			}
-		}
-		
-		// Check for subject tag not nested by subject group tag
-		if (!$sectionName) {
-			$sectionNode = $categoriesNode ? $categoriesNode->getChildByName('subject') : null;
-			if ($sectionNode) $sectionName = ucwords(strtolower($sectionNode->getValue()));
 		}
 		
 		if ($sectionName) {
@@ -501,19 +484,19 @@ class NlmImportDom {
 		
 		// Ensure we have a section name
 		if (!$sectionName) {
-			$articleTitle = NlmImportDom::getArticleTitle($articleNode);
-			$errors[] = array('plugins.importexport.nlm.import.error.missingSection', array('title' => $articleTitle));
+			$articleTitle = BPressImportDom::getArticleTitle($articleNode);
+			$errors[] = array('plugins.importexport.bpress.import.error.missingSection', array('title' => $articleTitle));
 			return null;
 		}
 		
 		// If this section already exists, return it
 		$sectionDao =& DAORegistry::getDAO('SectionDAO');
-		$section =& $sectionDao->getSectionByTitle($sectionName, $journal->getId(), $journal->getPrimaryLocale());
+		$section =& $sectionDao->getByTitle($sectionName, $journal->getId(), $journal->getPrimaryLocale());
 		if ($section) return $section;
 		
 		// Otherwise, create a new section
 		import('classes.journal.Section');
-		AppLocale::requireComponents(LOCALE_COMPONENT_OJS_DEFAULT);
+		AppLocale::requireComponents(LOCALE_COMPONENT_APP_DEFAULT);
 		$section = new Section();
 		$section->setJournalId($journal->getId());
 		$section->setTitle($sectionName, $journal->getPrimaryLocale());
@@ -525,10 +508,8 @@ class NlmImportDom {
 		$section->setEditorRestricted(true);
 		$section->setHideTitle(false);
 		$section->setHideAuthor(false);
-		$section->setHideAbout(true);
-		$section->setDisableComments(true);
 		
-		$sectionDao->insertSection($section);
+		$sectionDao->insertObject($section);
 		
 		if ($section->getId()) {
 			return $section;
@@ -593,99 +574,19 @@ class NlmImportDom {
 		import('classes.article.Author');
 		$authorDao =& DAORegistry::getDAO('AuthorDAO');
 		$primaryLocale = $journal->getPrimaryLocale();
-		
-		$checkContributorNode = $articleNode->getChildByName('contrib-group');
-		if (!$checkContributorNode) {
-			// No authors present, create default 'N/A' author
-			$author =& NlmImportDom::createEmptyAuthor($article);
-			$authorDao->insertAuthor($author);
-		} else {
-			$useAuthorNotes = false;
-			for ($contribIndex=0; ($contributorNode = $articleNode->getChildByName('contrib-group', $contribIndex)); $contribIndex++) {
-				$authors = array();
-				$emails = array();
-				$affiliations = array();
-				
-				if (!$contributorNode) {
-					// No authors present, create default 'N/A' author
-					$author =& NlmImportDom::createEmptyAuthor($article);
-					$authorDao->insertAuthor($author);
-				} else {
-					// Otherwise, parse all author names first
-					for ($index=0; ($node = $contributorNode->getChildByName('contrib', $index)); $index++) {
-						if (!$node) continue;
-						$author =& NlmImportDom::handleAuthorNode($journal, $node, $article, $contribIndex);
-						if ($author) $authors[] = $author;
-					}
-					
-					// Then parse author affiliation and email info
-					for ($index=0; ($node = $contributorNode->getChildByName('aff', $index)); $index++) {
-						if (!$node) continue;
-						$affiliation = $node->getValue();
-						
-						// Manually extract email if provided via email tags
-						$pattern = '/\<email\>(.*)\<\/email\>/';
-						preg_match($pattern, $affiliation, $matches);
-						if (isset($matches[1])) {
-							$email = filter_var(trim($matches[1]), FILTER_VALIDATE_EMAIL);
-							if ($email) $emails[] = $email;
-						}
-						
-						Request::cleanUserVar($affiliation);
-						$affiliation = strip_tags(trim($affiliation));
-						if ($affiliation) $affiliations[] = $affiliation;
-					}
-					
-					// Check if author note node used instead of affiliation node
-					$authorNotes = null;
-					$correspEmail = null;
-					if (empty($affiliations)) {
-						$authorNotesNode = $articleNode->getChildByName('author-notes');
-						if ($authorNotesNode) {
-							// Check for a correspondence node with email address
-							$correspNode = $authorNotesNode->getChildByName('corresp');
-							if ($correspNode) {
-								$correspText = $correspNode->getValue();
-								
-								// Manually extract email if provided via email tags
-								$pattern = '/\<email\>(.*)\<\/email\>/';
-								preg_match($pattern, $correspText, $matches);
-								if (isset($matches[1])) {
-									$correspEmail = filter_var(trim($matches[1]), FILTER_VALIDATE_EMAIL);
-								}
-							} else {
-								$authorNotes = $authorNotesNode->getValue();
-								Request::cleanUserVar($authorNotes);
-								$authorNotes = trim($authorNotes);
-							}
-						}
-					}
-					
-					// Assign email and affiliation info to authors
-					$index = 0;
-					$useEmails = (count($authors) == count($emails)) ? true : false;
-					$useAffiliations = (count($authors) == count($affiliations)) ? true : false;
-					foreach ($authors as $author) {
-						// Number of emails match number of authors
-						if ($useEmails) $author->setEmail($emails[$index]);
-						// Number of affiliations match number of authors
-						if ($useAffiliations) {
-							$author->setAffiliation($affiliations[$index], $primaryLocale);
-							// One affiliation text as composite for all authors, assign to first author
-						} elseif ((count($affiliations)) == 1 && ($index == 0)) {
-							$author->setAffiliation($affiliations[$index], $primaryLocale);
-							// One email specified in correspondence node
-						} elseif ($correspEmail && ($index == 0)) {
-							$author->setEmail($correspEmail);
-							// One set of author notes as composite for all authors, assign to first author
-						} elseif ($authorNotes && ($index == 0) && !$useAuthorNotes) {
-							$author->setAffiliation($authorNotes, $primaryLocale);
-							$useAuthorNotes = true;
-						}
-						if ($insertAuthors) $authorDao->insertAuthor($author);
-						$allAuthors[] = $author;
-						$index++;
-					}
+	
+		for ($contribIndex=0; ($contributorNode = $articleNode->getChildByName('authors', $contribIndex)); $contribIndex++) {
+			if (!$contributorNode) {
+				// No authors present, create default 'N/A' author
+				$author =& BPressImportDom::createEmptyAuthor($article);
+				$authorDao->insertObject($author);
+			} else {
+				// Otherwise, parse all author names first
+				for ($index=0; ($node = $contributorNode->getChildByName('author', $index)); $index++) {
+					if (!$node) continue;
+					$author =& BPressImportDom::handleAuthorNode($journal, $node, $article, $contribIndex);
+					if ($author) $allAuthors[] = $author;
+					if ($insertAuthors) $authorDao->insertObject($author);
 				}
 			}
 		}
@@ -700,25 +601,27 @@ class NlmImportDom {
 	 */
 	function handleAuthorNode(&$journal, &$authorNode, &$article, $authorIndex) {
 		$author = new Author();
-		$nameNode = $authorNode->getChildByName('name');
-		if (!$nameNode) {
-			$collabNode = $authorNode->getChildByName('collab');
-			if ($collabNode) {
-				$collabText = substr($collabNode->getValue(), 0, 90);
-				$author->setFirstName('');
-				$author->setLastName((string)$collabText);
-			} else {
-				$author->setFirstName('');
-				$author->setLastName('American Library Association');
-			}
-		} else {
-			if (($node = $nameNode->getChildByName('given-names'))) $author->setFirstName((string)$node->getValue());
-			if (($node = $nameNode->getChildByName('surname'))) $author->setLastName((string)$node->getValue());
-		}
+		
+		$fname = $authorNode->getChildValue('fname');
+		$lname = $authorNode->getChildValue('lname');
+		$mname = $authorNode->getChildValue('mname');
+		$suffix = $authorNode->getChildValue('suffix');
+		
+		$email = $authorNode->getChildValue('email');
+		$affiliation = $authorNode->getChildValue('institution');
+
+		$author->setFirstName(isset($fname)? $fname : '');
+		$author->setLastName(isset($lname)? $lname : 'American Library Association');
+		$author->setMiddleName((isset($mname))? $mname : '');
+		$author->setSuffix(isset($suffix)? $suffix : '');
+		$author->setEmail(isset($email)? $email : $author->setEmail('ala@ala.org'));
+		$author->setAffiliation((isset($affiliation)? $affiliation : ''), $journal->getPrimaryLocale());
+		
 		$author->setSequence($authorIndex + 1); // 1-based
 		$author->setSubmissionId($article->getId());
-		$author->setEmail('ala@ala.org');
+		$author->setIncludeInBrowse(true);
 		$author->setPrimaryContact($authorIndex == 0 ? 1:0);
+		$author->setUserGroupId($article->getId());
 		return $author;
 	}
 	
@@ -760,7 +663,7 @@ class NlmImportDom {
 		$xmlArticle = file_get_contents($htmlGalleyPath);
 		
 		if ($xmlArticle===false) {
-			$errors[] = array('plugins.importexport.nlm.import.error.galleyMissing', array('title' => $article->getLocalizedTitle()));
+			$errors[] = array('plugins.importexport.bpress.import.error.galleyMissing', array('title' => $article->getLocalizedTitle()));
 			return false;
 		}
 		
@@ -800,10 +703,10 @@ class NlmImportDom {
 				$subBody = '';
 				
 				// Retrieve title
-				$subTitle = NlmImportDom::processTitle($subArticleMetaNode);
+				$subTitle = BPressImportDom::getArticleTitle($subArticleMetaNode);
 				
 				// Retrieve authors
-				NlmImportDom::processAuthors($subArticleMetaNode, $article, $journal, $subAuthors, false);
+				BPressImportDom::processAuthors($subArticleMetaNode, $article, $journal, $subAuthors, false);
 				
 				// Retrieve body text
 				$subBodyMatches = array();
@@ -855,12 +758,12 @@ class NlmImportDom {
 		}
 		
 		if (($fileId = $articleFileManager->copyPublicFile($htmlGalleyPath, 'application/xml'))===false) {
-			$errors[] = array('plugins.importexport.nlm.import.error.couldNotCopy', array('url' => $htmlGalleyPath));
+			$errors[] = array('plugins.importexport.bpress.import.error.couldNotCopy', array('url' => $htmlGalleyPath));
 			return false;
 		}
 		
 		if (!isset($fileId)) {
-			$errors[] = array('plugins.importexport.nlm.import.error.galleyMissing', array('title' => $article->getLocalizedTitle()));
+			$errors[] = array('plugins.importexport.bpress.import.error.galleyMissing', array('title' => $article->getLocalizedTitle()));
 			return false;
 		}
 		
@@ -918,8 +821,7 @@ class NlmImportDom {
 					}
 				}
 			}
-		}
-		
+		}	
 		return true;
 	}
 	
@@ -932,35 +834,29 @@ class NlmImportDom {
 	 * @param ArticleFileManager $articleFileManager
 	 * @return boolean
 	 */
-	function handlePDFGalleyNode(&$journal, $pdfGalleyPath, &$article, &$errors, &$articleFileManager) {
+	function handlePDFGalleyNode(&$journal, $pdfGalleyPath, $fileId, &$article, &$errors, &$articleFileManager) {
 		$galleyDao =& DAORegistry::getDAO('ArticleGalleyDAO');
 		
 		import('classes.article.ArticleGalley');
 		$galley = new ArticleGalley();
-		$galley->setArticleId($article->getId());
+		$galley->setSubmissionId($article->getId());
 		$galley->setSequence(1);
 		$galley->setLocale($article->getLocale());
 		$galley->setLabel('PDF');
 		
-		if (($fileId = $articleFileManager->copyPublicFile($pdfGalleyPath, 'application/pdf'))===false) {
-			$errors[] = array('plugins.importexport.nlm.import.error.couldNotCopy', array('url' => $pdfGalleyPath));
-			return false;
-		}
-		
-		if (!isset($fileId)) {
-			$errors[] = array('plugins.importexport.nlm.import.error.galleyMissing', array('title' => $article->getLocalizedTitle()));
-			return false;
-		}
+// 		if (($fileId = $articleFileManager->copyPublicFile($pdfGalleyPath, 'application/pdf'))===false) {
+// 			$errors[] = array('plugins.importexport.bpress.import.error.couldNotCopy', array('url' => $pdfGalleyPath));
+// 			return false;
+// 		} FIGURE OUT REPLACEMENT METHOD
 		
 		$galley->setFileId($fileId);
-		$galleyDao->insertGalley($galley);
+		$galleyDao->insertObject($galley);
 		
 		return true;
 	}
 	
 	function getArticleTitle (&$articleNode) {
-		$titleGroupNode = $articleNode->getChildByName('title-group');
-		$titleNode = $titleGroupNode->getChildByName('article-title');
+		$titleNode = $articleNode->getChildByName('title');
 		$title = $titleNode->getValue();
 		Request::cleanUserVar($title);
 		$title = trim($title);
